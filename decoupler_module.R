@@ -401,11 +401,13 @@ contrast&rsquo;s volcano (log2FC vs -log10 p), as in the decoupleR TF vignette.
 Red = the gene moved the way its edge predicts (activating target up, repressing
 target down) and so <i>supports</i> an active call; blue opposes it. With no
 p-value column it falls back to a signed target bar.</li>
-<li><b>Pathway inspector</b> &mdash; a pathway&rsquo;s footprint genes plotted as
-set weight vs your per-gene statistic, as in the decoupleR pathway vignette
-(the &ldquo;MAPK&rdquo; view). Genes in the top-right and bottom-left quadrants
-drive a positive activity score. Weighted signed sets only (PROGENy, CytoSig);
-an unsigned set shows a ranked target bar instead.</li>
+<li><b>Pathway inspector</b> &mdash; the same idea for the pathway / signature
+set. PROGENy and CytoSig (continuous weights) get the decoupleR pathway-vignette
+scatter of set weight vs your per-gene statistic (the &ldquo;MAPK&rdquo; view) &mdash;
+top-right and bottom-left genes drive a positive score. Drug Perturbations from
+GEO (&plusmn;1 up/down membership) gets the volcano instead, red where a gene
+moved the way the signature predicts (your contrast resembles the drug). Unsigned
+sets (MSigDB, ChEA) show a ranked target bar.</li>
 </ul>
 
 <h4>Contrast comparison tab</h4>
@@ -795,8 +797,7 @@ decouplerServer <- function(id, dea) {
                                         "opposes activation" = "#2166AC",
                                         "neutral" = "grey70"), name = NULL) +
           labs(x = "log2 fold change", y = "-log10 p-value",
-               title = sprintf("%s targets on the %s volcano  (red = change agrees with the regulon)",
-                               tf, cc)) +
+               title = sprintf("%s targets on the %s volcano", tf, cc)) +
           theme_minimal(base_size = 12)
       } else {
         db <- data.table::copy(head(dd[order(-abs(stat))], 40))
@@ -830,11 +831,13 @@ decouplerServer <- function(id, dea) {
                 rownames = FALSE, options = list(pageLength = 15))
     })
 
-    # ---- pathway inspector (decoupleR pathway vignette / MAPK view) ----------
-    # footprint weight (x) vs this contrast's per-gene statistic (y). Genes in
-    # the top-right and bottom-left quadrants drive a positive activity score.
-    # Only meaningful for weighted signed sets (PROGENy, CytoSig); an unsigned
-    # set (all weights 1) degrades to a ranked target bar.
+    # ---- pathway inspector --------------------------------------------------
+    # Three views, picked from the set's weights:
+    #   continuous-weight signed (PROGENy, CytoSig)  -> weight x stat scatter
+    #        (decoupleR pathway vignette / "MAPK" view)
+    #   +/-1 signed (Drug Perturbations from GEO)     -> log2FC vs -log10 p
+    #        volcano coloured by agreement (decoupleR TF-vignette view)
+    #   unsigned (MSigDB, ChEA)                       -> ranked target bar
     output$ui_pw_insp_src <- renderUI({
       r <- RES(); req(r, !is.null(r$pw))
       selectizeInput(ns("pw_insp_src"), "Pathway / signature",
@@ -849,8 +852,9 @@ decouplerServer <- function(id, dea) {
       tg <- as.data.table(r$pw_net)[source == input$pw_insp_src,
                                     .(gene = target, weight = mor)]
       validate(need(nrow(tg) > 0, "No footprint genes for that set."))
+      gs <- .dc_gene_stats(dea_n(), input$pw_insp_c)
       sm <- data.table(gene = rownames(r$mat), stat = r$mat[, input$pw_insp_c])
-      m  <- merge(tg, sm, by = "gene")
+      m  <- merge(merge(tg, gs, by = "gene", all.x = TRUE), sm, by = "gene")
       validate(need(nrow(m) > 0, "No overlap between this set and your data."))
       m[, effect := ifelse(weight == 0 | stat == 0, "neutral",
                     ifelse(sign(weight) == sign(stat), "supports activity",
@@ -861,7 +865,10 @@ decouplerServer <- function(id, dea) {
     pw_insp_gg <- reactive({
       dd <- pw_insp_data(); req(nrow(dd) > 0)
       src <- input$pw_insp_src; cc <- input$pw_insp_c
-      weighted <- data.table::uniqueN(round(abs(dd$weight), 8)) > 1
+      signed   <- isTRUE(pw_signed())
+      weighted <- signed && data.table::uniqueN(round(abs(dd$weight), 8)) > 1
+      cols     <- c("supports activity" = "#B2182B",
+                    "opposes activity"  = "#2166AC", "neutral" = "grey70")
       if (weighted) {
         lab <- head(dd, 18)
         ggplot(dd, aes(weight, stat, color = effect)) +
@@ -870,12 +877,35 @@ decouplerServer <- function(id, dea) {
           geom_point(size = 2.4, alpha = 0.85) +
           geom_text(data = lab, aes(label = gene), size = 3, vjust = -0.7,
                     check_overlap = TRUE, show.legend = FALSE) +
-          scale_color_manual(values = c("supports activity" = "#B2182B",
-                                        "opposes activity" = "#2166AC",
-                                        "neutral" = "grey70"), name = NULL) +
+          scale_color_manual(values = cols, name = NULL) +
           labs(x = sprintf("%s footprint weight", src),
                y = sprintf("%s  (%s)", RES()$stat, cc),
                title = sprintf("%s  -  top-right / bottom-left genes drive a positive score",
+                               src)) +
+          theme_minimal(base_size = 12)
+      } else if (signed && mean(is.finite(dd$logfc)) > 0.5 &&
+                 mean(is.finite(dd$pval)) > 0.5) {
+        dv  <- dd[is.finite(logfc) & is.finite(pval)]
+        lab <- head(dv[order(-abs(stat))], 15)
+        ggplot(dv, aes(logfc, -log10(pmax(pval, 1e-300)), color = effect)) +
+          geom_vline(xintercept = 0, linetype = 3, color = "grey60") +
+          geom_point(size = 2.3, alpha = 0.85) +
+          geom_text(data = lab, aes(label = gene), size = 3, vjust = -0.7,
+                    check_overlap = TRUE, show.legend = FALSE) +
+          scale_color_manual(values = cols, name = NULL) +
+          labs(x = "log2 fold change", y = "-log10 p-value",
+               title = sprintf("%s signature on the %s volcano", src, cc)) +
+          theme_minimal(base_size = 12)
+      } else if (signed) {
+        db <- data.table::copy(head(dd[order(-abs(stat))], 40))
+        db[, dir := ifelse(weight > 0, "up in signature", "down in signature")]
+        ggplot(db, aes(stat, reorder(gene, stat), fill = dir)) +
+          geom_col() +
+          scale_fill_manual(values = c("up in signature" = "#B2182B",
+                                       "down in signature" = "#2166AC"), name = NULL) +
+          geom_vline(xintercept = 0, color = "grey40") +
+          labs(x = sprintf("%s  (%s)", RES()$stat, cc), y = NULL,
+               title = sprintf("%s signature genes  (up-genes up + down-genes down = resembles it)",
                                src)) +
           theme_minimal(base_size = 12)
       } else {
@@ -892,21 +922,28 @@ decouplerServer <- function(id, dea) {
     output$pw_insp_plot <- renderPlot(pw_insp_gg())
     .dc_reg_dl(output, "pw_insp_plot", pw_insp_gg, "pathway_inspector", w = 9, h = 7)
     output$pw_insp_note <- renderUI({
-      req(RES())
-      if (isTRUE(pw_signed()))
-        helpText("Each point is a footprint gene: its set weight (x) against ",
-                 "your per-gene statistic (y), as in the decoupleR pathway ",
-                 "vignette. Genes in the top-right and bottom-left quadrants ",
-                 "push the activity score positive; the off-quadrant genes pull ",
-                 "it down.")
+      r <- RES(); req(r); id <- r$pw_id %||% ""
+      if (id %in% c("progeny", "cytosig"))
+        helpText("Each point is a footprint gene: its set weight (x) vs your ",
+                 "per-gene statistic (y), as in the decoupleR pathway vignette. ",
+                 "Genes in the top-right and bottom-left quadrants push the ",
+                 "activity score up; off-quadrant genes pull it down.")
+      else if (isTRUE(pw_signed()))
+        helpText("This signature has up / down membership only (weight +/-1), ",
+                 "so it gets the volcano view: ", strong("red"), " = the gene ",
+                 "moved the way the signature predicts (a signature 'up' gene ",
+                 "up, or a 'down' gene down) - your contrast resembles it; ",
+                 strong("blue"), " = it reverses the signature.")
       else
         helpText(strong("Unsigned set: "), "every weight is 1, so only the ",
-                 "target statistic is shown - this is the direction the set's ",
-                 "genes moved as a group, not an activation call.")
+                 "target statistic is shown - the direction the set's genes ",
+                 "moved as a group, not an activation call.")
     })
     output$pw_insp_tbl <- renderDT({
       dd <- pw_insp_data(); req(nrow(dd) > 0)
-      datatable(dd[, .(gene, weight = round(weight, 3), stat = round(stat, 3), effect)],
+      datatable(dd[, .(gene, weight = round(weight, 3),
+                       log2fc = round(logfc, 3), p_value = signif(pval, 3),
+                       stat = round(stat, 3), effect)],
                 rownames = FALSE, options = list(pageLength = 15))
     })
 
