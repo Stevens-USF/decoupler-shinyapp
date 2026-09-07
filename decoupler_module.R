@@ -201,6 +201,18 @@ DC_ORGANISM <- getOption("decoupler.organism", "human")
       "effectsize"        = effectsize,
       "foldchange.log2"   = foldchange.log2)]
   d <- d[is.finite(value)]
+  # winsorize the per-gene statistic: cap |value| at the largest |value| among
+  # significant genes (qvalue < 0.1), or the 99.5th percentile if there is no
+  # qvalue column. Stops a degenerate DEA effect size (e.g. msqrob dividing by a
+  # near-zero variance estimate) from hijacking a gene set's score.
+  cap <- if ("qvalue" %in% names(d)) {
+    qv <- suppressWarnings(as.numeric(d$qvalue))
+    suppressWarnings(max(abs(d$value[is.finite(qv) & qv < 0.1]), na.rm = TRUE))
+  } else -Inf
+  if (!is.finite(cap) || cap <= 0)
+    cap <- suppressWarnings(as.numeric(stats::quantile(abs(d$value), 0.995, na.rm = TRUE)))
+  if (is.finite(cap) && cap > 0)
+    d[abs(value) > cap, value := sign(value) * cap]
   # collapse duplicate gene symbols per contrast. Prefer the protein group with
   # the most peptide support (npep_contrast, supplied by the feeder); otherwise
   # fall back to the median value, so a lone 1-peptide protein group can't hijack
@@ -242,9 +254,9 @@ DC_ORGANISM <- getOption("decoupler.organism", "human")
 
 .dc_available_stats <- function(dea) {
   cn <- names(dea)
-  c(if (all(c("foldchange.log2","pvalue") %in% cn)) "signed_-log10(p)",
+  c(if ("effectsize" %in% cn) "effectsize",
+    if (all(c("foldchange.log2","pvalue") %in% cn)) "signed_-log10(p)",
     if (all(c("foldchange.log2","qvalue") %in% cn)) "signed_-log10(q)",
-    if ("effectsize" %in% cn) "effectsize",
     if ("foldchange.log2" %in% cn) "foldchange.log2")
 }
 
@@ -352,7 +364,8 @@ the model t-value as an <i>activity score</i>. This is activity <i>inference</i>
 <ol>
 <li>Pick the DAA algorithm (if several) and the contrasts to score.</li>
 <li>Pick the per-gene statistic (see below).</li>
-<li>Pick a regulator set, a pathway set, and the scoring method; Run.</li>
+<li>Pick a regulator set, a pathway set, and the regulator scoring method
+(pathway method is automatic); Run.</li>
 <li><b>Validate on a positive control first.</b> A TNF-alpha / LPS contrast must
 call NF-kB / TNF / interferon active. If it does not, do not trust the rest.</li>
 </ol>
@@ -380,12 +393,14 @@ unsigned sets prefer GOAT / GSEA and supply the direction from biology yourself.
 
 <h4>Per-gene statistic</h4>
 <ul>
-<li><b>signed -log10(p)</b> &mdash; magnitude and precision. Standard default;
-can favour well-measured (abundant) proteins.</li>
 <li><b>effectsize</b> &mdash; magnitude scaled by variability; least
-abundance-biased; most stable input for MLM.</li>
+abundance-biased; <b>the default</b>. Non-significant genes are capped so a
+degenerate effect size cannot dominate a set.</li>
+<li><b>signed -log10(p)</b> &mdash; magnitude and precision; favours well-measured
+(abundant) proteins, so sets of abundant proteins (OXPHOS, ribosome) can look
+inflated &mdash; especially with msqrob.</li>
 <li><b>foldchange.log2</b> &mdash; raw magnitude; sensitive to noisy large
-changes; avoid with MLM.</li>
+changes.</li>
 <li><b>signed -log10(q)</b> &mdash; thresholded and conservative; result depends
 on how many proteins pass FDR in that contrast.</li>
 </ul>
@@ -395,11 +410,13 @@ to <i>effectsize</i> here).</p>
 
 <h4>Method</h4>
 <ul>
-<li><b>ULM</b> &mdash; one regulator at a time; fast; default.</li>
-<li><b>MLM</b> &mdash; all regulators jointly; deconvolves overlapping target
-sets (useful for redundant sets such as ChEA); more outlier-sensitive.</li>
-<li><b>consensus</b> &mdash; mean of ULM / MLM / wsum; slow, robust.</li>
+<li><b>ULM</b> &mdash; one regulator at a time; fast; the default, and the only
+sound choice for large overlapping regulons (CollecTRI, ChEA) &mdash; MLM there is
+unstable (collinear predictors).</li>
+<li><b>consensus</b> &mdash; mean of ULM / MLM / wsum; slower, sometimes steadier.</li>
 </ul>
+<p>Pathways are scored automatically: MLM for PROGENy (small, near-orthogonal),
+ULM for everything else (CytoSig, MSigDB).</p>
 
 <h4>Reading the score and the p-value</h4>
 <p>The score is a t-value: sign = direction, magnitude = strength and
@@ -469,7 +486,7 @@ decouplerTabUI <- function(id) {
       uiOutput(ns("ui_tf_resource")),
       uiOutput(ns("ui_pw_resource")),
       radioButtons(ns("method"), "Regulator scoring method",
-                   c("ULM (fast, default)" = "ulm", "MLM" = "mlm",
+                   c("ULM (fast, default)" = "ulm",
                      "consensus (slow)" = "consensus"), selected = "ulm"),
       numericInput(ns("minsize"), "Min. targets per regulator", 5, 3, 50),
       numericInput(ns("topn"), "Rows shown in heatmaps (most variable)", 30, 10, 100),
@@ -655,7 +672,7 @@ decouplerServer <- function(id, dea) {
         incProgress(0.2, detail = "scoring pathway / signature activity")
         pwr <- if (!is.null(pw) && nrow(pw) > 0)
           as.data.table(.dc_score(mat, pw,
-            if (pw_id %in% c("progeny", "cytosig")) "mlm" else "ulm",
+            if (identical(pw_id, "progeny")) "mlm" else "ulm",
             input$minsize, warn))
           else NULL
 
