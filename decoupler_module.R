@@ -408,15 +408,53 @@ on how many proteins pass FDR in that contrast.</li>
 choice to any GOAT / GSEA comparison (GOAT ranked by signed effect size is close
 to <i>effectsize</i> here).</p>
 
-<h4>Method</h4>
+<h4>Scoring method (ULM vs MLM)</h4>
+<p>Both fit a linear model of your per-gene statistic against target-set
+membership. They differ in whether the sets are fitted one at a time or all at
+once, and that difference decides which collections each can handle.</p>
 <ul>
-<li><b>ULM</b> &mdash; one regulator at a time; fast; the default, and the only
-sound choice for large overlapping regulons (CollecTRI, ChEA) &mdash; MLM there is
-unstable (collinear predictors).</li>
-<li><b>consensus</b> &mdash; mean of ULM / MLM / wsum; slower, sometimes steadier.</li>
+<li><b>ULM (univariate)</b> &mdash; each regulator / set is scored on its own:
+regress the per-gene statistic on that one set&rsquo;s membership (using its
+signed weights where it has them), and take the slope&rsquo;s t-value as the
+score. Fast, and the result for a set does not depend on how many other sets you
+loaded or how much they overlap. This is the default and the primary method for
+every panel here.</li>
+<li><b>MLM (multivariate)</b> &mdash; every set in the collection is entered into
+<i>one</i> regression as competing predictors, so a gene targeted by several
+regulators is credited to whichever set best explains the leftover signal. In
+principle this untangles overlapping regulons. In practice it only behaves when
+the collection is small and its sets barely overlap: with hundreds of correlated
+membership columns the design matrix is near-singular, so coefficients inflate,
+flip sign, or the fit fails outright.</li>
+<li><b>consensus</b> &mdash; z-scores ULM, MLM and wsum and averages them. Slower;
+the MLM term still carries some of that instability but it is diluted by the other
+two. Use it as a second opinion on the ULM regulator calls.</li>
 </ul>
-<p>Pathways are scored automatically: MLM for PROGENy (small, near-orthogonal),
-ULM for everything else (CytoSig, MSigDB).</p>
+
+<p><b>Why the regulator panel is ULM-only.</b> CollecTRI (~1000 TFs) and
+ChEA&nbsp;2022 (~1000 TFs, built from ChIP-seq peaks) are both large and heavily
+overlapping &mdash; many factors co-bind the same active promoters, and
+ChEA&rsquo;s peak-to-gene target sets are especially broad and noisy. That is
+precisely the regime where MLM is unstable, and the decoupleR benchmark
+(Badia-i-Mompel 2022) found ULM and consensus best for TF activity on collections
+this size. So MLM is not offered for regulators; choose <b>consensus</b> if you
+want a cross-check. ChEA is also unsigned (every weight = 1), so its score is set
+<i>enrichment</i> &mdash; &ldquo;these ChIP targets moved together&rdquo; &mdash;
+not an activity estimate, and MLM&rsquo;s deconvolution idea does not even apply
+to that question.</p>
+
+<p><b>The pathway panel picks the method for you.</b>
+<b>PROGENy</b> is the single MLM case: 14 pathways of ~100 curated response genes
+each, deliberately built to be response-specific and almost non-overlapping
+&mdash; the small, near-orthogonal collection MLM was designed for (PROGENy&rsquo;s
+own published model is itself multivariate). Everything else on the pathway panel
+runs ULM: <b>CytoSig</b>, whose cytokine-response signatures are strongly
+cross-correlated (the interferon family especially &mdash; a plain joint fit
+splits their shared signal unpredictably), and all <b>MSigDB</b> collections
+(Hallmark&rsquo;s 50 sets already overlap; Reactome / KEGG / GO are nested
+parent&ndash;child terms that no unregularised linear model can fit). If MLM is
+selected internally and cannot fit a collection, the run falls back to ULM and
+warns.</p>
 
 <h4>Reading the score and the p-value</h4>
 <p>The score is a t-value: sign = direction, magnitude = strength and
