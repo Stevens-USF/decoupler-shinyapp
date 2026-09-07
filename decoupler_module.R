@@ -41,7 +41,7 @@
 #    tabItem("decoupler", decouplerTabUI("dc"))
 #    decouplerServer("dc", dea = reactive(store$dea))
 #  store$dea already has columns gene / contrast / log2fc / pvalue / qvalue /
-#  effectsize / algorithm - the module aliases log2fc and shows a DEA-algorithm
+#  effectsize / algorithm - the module aliases log2fc and shows a DAA-algorithm
 #  picker itself. Needs decoupler_cache/ and geneset_cache/ in the working dir
 #  (run prefetch_decoupler_resources.R once).
 # =============================================================================
@@ -211,7 +211,7 @@ DC_ORGANISM <- getOption("decoupler.organism", "human")
 
 # per-gene log2FC / p-value for ONE contrast, gene symbols upper-cased and
 # de-duplicated the same way .dc_matrix does (keep the largest |log2FC|). Used
-# by the inspector volcano; columns absent in the DEA table come back all-NA.
+# by the inspector volcano; columns absent in the DAA table come back all-NA.
 .dc_gene_stats <- function(dea, cc) {
   d <- as.data.frame(dea)
   d <- d[!is.na(d$contrast) & d$contrast == cc & !is.na(d$gene) & d$gene != "", ,
@@ -334,7 +334,7 @@ the model t-value as an <i>activity score</i>. This is activity <i>inference</i>
 
 <h4>Workflow</h4>
 <ol>
-<li>Pick the DEA algorithm (if several) and the contrasts to score.</li>
+<li>Pick the DAA algorithm (if several) and the contrasts to score.</li>
 <li>Pick the per-gene statistic (see below).</li>
 <li>Pick a regulator set, a pathway set, and the scoring method; Run.</li>
 <li><b>Validate on a positive control first.</b> A TNF-alpha / LPS contrast must
@@ -539,14 +539,14 @@ decouplerTabUI <- function(id) {
 # ---------------------------------------------------------------- server -----
 #  dea(): a long data.frame with columns gene, contrast and >=1 of
 #  foldchange.log2 (or log2fc) / pvalue / qvalue / effectsize. An optional
-#  `algorithm` column (>1 DEA method, as in MS-DAP_visualizer's store$dea) is
+#  `algorithm` column (>1 DAA method, as in MS-DAP_visualizer's store$dea) is
 #  exposed as a picker and filtered to one method before scoring.
 decouplerServer <- function(id, dea) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     RES <- reactiveVal(NULL)
 
-    # normalise column names + collapse to the selected DEA algorithm
+    # normalise column names + collapse to the selected DAA algorithm
     dea_n <- reactive({
       d <- dea(); req(d); d <- as.data.frame(d)
       if (!"foldchange.log2" %in% names(d) && "log2fc" %in% names(d))
@@ -561,7 +561,7 @@ decouplerServer <- function(id, dea) {
       if (!"algorithm" %in% names(d)) return(NULL)
       a <- sort(unique(as.character(d$algorithm)))
       if (length(a) < 2) return(NULL)
-      selectInput(ns("algo"), "DEA algorithm", choices = a, selected = a[1])
+      selectInput(ns("algo"), "DAA algorithm", choices = a, selected = a[1])
     })
 
     contrasts_all <- reactive({
@@ -610,7 +610,7 @@ decouplerServer <- function(id, dea) {
       ok <- tryCatch(withProgress(message = "Activity inference", value = 0.1, {
         mat <- .dc_matrix(d, input$stat, input$contrasts)
         if (nrow(mat) < 50)
-          stop(sprintf("Only %d usable gene x contrast values - check that the DEA table has a %s column and real gene symbols.",
+          stop(sprintf("Only %d usable gene x contrast values - check that the DAA table has a %s column and real gene symbols.",
                        nrow(mat), input$stat), call. = FALSE)
 
         incProgress(0.2, detail = paste("loading", reg[[tf_id]]$label))
@@ -778,7 +778,7 @@ decouplerServer <- function(id, dea) {
 
     # volcano of the regulon's targets (decoupleR TF vignette style): log2FC vs
     # -log10 p, coloured by whether the change agrees with the mode of
-    # regulation. Falls back to a signed target bar when the DEA table has no
+    # regulation. Falls back to a signed target bar when the DAA table has no
     # p-value column.
     insp_gg <- reactive({
       dd <- insp_data(); req(nrow(dd) > 0); tf <- input$insp_tf; cc <- input$insp_c

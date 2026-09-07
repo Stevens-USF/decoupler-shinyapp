@@ -57,7 +57,7 @@ ui <- dashboardPage(
     menuItem("decoupleR", tabName = "dc", icon = icon("diagram-project")))),
   dashboardBody(tabItems(
     tabItem("data",
-      box(width = 6, title = "Load MS-DAP DEA", status = "primary", solidHeader = TRUE,
+      box(width = 6, title = "Load MS-DAP DAA", status = "primary", solidHeader = TRUE,
         fileInput("f", "differential_abundance_analysis.xlsx (or *_dea long .csv)",
                   accept = c(".xlsx", ".csv", ".tsv", ".txt")),
         uiOutput("ui_algo"),
@@ -73,7 +73,7 @@ server <- function(input, output, session) {
   observeEvent(input$f, raw(parse_msdap_dea(input$f$datapath)))
   output$ui_algo <- renderUI({
     r <- raw(); if (is.null(r) || length(r$algos) < 2 || any(is.na(r$algos))) return(NULL)
-    selectInput("algo", "DEA algorithm", choices = r$algos, selected = r$used)
+    selectInput("algo", "DAA algorithm", choices = r$algos, selected = r$used)
   })
   store <- reactiveValues(long = NULL)
   observeEvent(input$load, {
