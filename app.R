@@ -58,7 +58,7 @@ ui <- dashboardPage(
   dashboardBody(tabItems(
     tabItem("data",
       box(width = 6, title = "Load MS-DAP DAA", status = "primary", solidHeader = TRUE,
-        fileInput("f", "differential_abundance_analysis.xlsx (or *_dea long .csv)",
+        fileInput("f", "differential_abundance_analysis.xlsx",
                   accept = c(".xlsx", ".csv", ".tsv", ".txt")),
         uiOutput("ui_algo"),
         actionButton("load", "Load", class = "btn-primary", icon = icon("check"))),
