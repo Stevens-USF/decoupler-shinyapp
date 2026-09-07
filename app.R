@@ -40,10 +40,18 @@ parse_msdap_dea <- function(path, algo = NULL) {
   use   <- if (!is.null(algo) && algo %in% algos) algo else algos[1]
   info  <- info[algo == use]
 
+  # peptides used per contrast (not algorithm-specific) so .dc_matrix can pick
+  # the best-supported protein group when several map to one gene symbol
+  pcn     <- cn[grepl("^peptides_used_for_dea_contrast: ", cn)]
+  pep_map <- stats::setNames(
+    pcn, sub("^peptides_used_for_dea_contrast: (.+?) #.*$", "\\1", pcn))
+
   long <- rbindlist(lapply(unique(info$contrast), function(cc) {
     sub <- info[contrast == cc]
     dt <- data.table(gene = as.character(dea[[gcol]]), contrast = cc)
     for (st in unique(sub$stat)) dt[[st]] <- dea[[sub[stat == st, col][1]]]
+    if (!is.null(pep_map[[cc]]))
+      dt$npep_contrast <- suppressWarnings(as.numeric(dea[[pep_map[[cc]]]]))
     dt
   }), fill = TRUE)
   setnames(long, "foldchange.log2", "foldchange.log2", skip_absent = TRUE)

@@ -201,8 +201,20 @@ DC_ORGANISM <- getOption("decoupler.organism", "human")
       "effectsize"        = effectsize,
       "foldchange.log2"   = foldchange.log2)]
   d <- d[is.finite(value)]
-  # collapse duplicate gene symbols per contrast: keep the largest |value|
-  d <- d[d[, .I[which.max(abs(value))], by = .(gene, contrast)]$V1]
+  # collapse duplicate gene symbols per contrast. Prefer the protein group with
+  # the most peptide support (npep_contrast, supplied by the feeder); otherwise
+  # fall back to the median value, so a lone 1-peptide protein group can't hijack
+  # a gene symbol through an extreme p-value (the old which.max(abs(value)) rule).
+  .pcol <- intersect(c("npep_contrast", "peptides_used_for_dea", "npep",
+                       "unique_peptides"), names(d))[1]
+  if (!is.na(.pcol) && any(is.finite(suppressWarnings(as.numeric(d[[.pcol]]))))) {
+    pn <- suppressWarnings(as.numeric(d[[.pcol]])); pn[is.na(pn)] <- -Inf
+    d[, .pepn := pn]
+    d <- d[d[, .I[which.max(.pepn)], by = .(gene, contrast)]$V1]
+    d[, .pepn := NULL]
+  } else {
+    d <- d[, .(value = stats::median(value, na.rm = TRUE)), by = .(gene, contrast)]
+  }
   m <- data.table::dcast(d, gene ~ contrast, value.var = "value")
   mat <- as.matrix(m[, -1]); rownames(mat) <- m$gene
   mat[is.na(mat)] <- 0
@@ -210,8 +222,9 @@ DC_ORGANISM <- getOption("decoupler.organism", "human")
 }
 
 # per-gene log2FC / p-value for ONE contrast, gene symbols upper-cased and
-# de-duplicated the same way .dc_matrix does (keep the largest |log2FC|). Used
-# by the inspector volcano; columns absent in the DAA table come back all-NA.
+# de-duplicated the same way .dc_matrix does (prefer the most peptide support,
+# then the largest |log2FC|). Used by the inspector volcano; columns absent in
+# the DAA table come back all-NA.
 .dc_gene_stats <- function(dea, cc) {
   d <- as.data.frame(dea)
   d <- d[!is.na(d$contrast) & d$contrast == cc & !is.na(d$gene) & d$gene != "", ,
@@ -219,7 +232,10 @@ DC_ORGANISM <- getOption("decoupler.organism", "human")
   g  <- toupper(sub(";.*$", "", d$gene))
   fc <- if ("foldchange.log2" %in% names(d)) d$foldchange.log2 else rep(NA_real_, nrow(d))
   pv <- if ("pvalue" %in% names(d)) d$pvalue else rep(NA_real_, nrow(d))
-  o  <- order(-abs(ifelse(is.na(fc), 0, fc)))
+  pc  <- intersect(c("npep_contrast", "peptides_used_for_dea", "npep",
+                     "unique_peptides"), names(d))[1]
+  pep <- if (!is.na(pc)) suppressWarnings(as.numeric(d[[pc]])) else rep(NA_real_, nrow(d))
+  o  <- order(-ifelse(is.na(pep), -Inf, pep), -abs(ifelse(is.na(fc), 0, fc)))
   out <- data.table::data.table(gene = g[o], logfc = fc[o], pval = pv[o])
   out[!duplicated(out$gene)]
 }

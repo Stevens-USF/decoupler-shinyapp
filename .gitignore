@@ -2,3 +2,4 @@
 rsconnect/
 .Rproj.user/
 .RData
+.RDataTmp
