@@ -1,0 +1,4 @@
+*.csv -text
+*.gmt -text
+*.json -text
+*.R text eol=lf
