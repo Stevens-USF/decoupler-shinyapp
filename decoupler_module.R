@@ -398,9 +398,12 @@ to confirm a call is not driven by two or three targets.</p>
 <ul>
 <li><b>Regulon inspector</b> &mdash; the chosen regulator&rsquo;s targets on this
 contrast&rsquo;s volcano (log2FC vs -log10 p), as in the decoupleR TF vignette.
-Red = the gene moved the way its edge predicts (activating target up, repressing
-target down) and so <i>supports</i> an active call; blue opposes it. With no
-p-value column it falls back to a signed target bar.</li>
+For a <i>signed</i> set (CollecTRI, DoRothEA) red = the gene moved the way its
+edge predicts (activating target up, repressing target down) and so
+<i>supports</i> an active call; blue opposes it. For an <i>unsigned</i> set
+(ChEA, .gmt) every edge weight is 1, so colour is only the target&rsquo;s
+direction &mdash; there is no activation call to support. With no p-value column
+it falls back to a target bar.</li>
 <li><b>Pathway inspector</b> &mdash; the same idea for the pathway / signature
 set. PROGENy and CytoSig (continuous weights) get the decoupleR pathway-vignette
 scatter of set weight vs your per-gene statistic (the &ldquo;MAPK&rdquo; view) &mdash;
@@ -763,7 +766,10 @@ decouplerServer <- function(id, dea) {
       choices = RES()$contrasts %||% NULL))
 
     # regulon target frame: mode of regulation + this contrast's log2FC / p /
-    # signed score, one row per target gene present in the data.
+    # signed score, one row per target gene present in the data. `effect` is an
+    # agreement call for SIGNED sets (does the change match the edge sign) and
+    # only a direction for UNSIGNED sets (ChEA, .gmt - every mor is 1, so there
+    # is no activation direction to agree with).
     insp_data <- reactive({
       r <- RES(); req(r, input$insp_tf, input$insp_c)
       tg <- as.data.table(r$net)[source == input$insp_tf, .(gene = target, mor)]
@@ -772,63 +778,96 @@ decouplerServer <- function(id, dea) {
       sm <- data.table(gene = rownames(r$mat), stat = r$mat[, input$insp_c])
       m  <- merge(merge(tg, gs, by = "gene", all.x = TRUE), sm, by = "gene")
       validate(need(nrow(m) > 0, "No overlap between this regulon and your data."))
-      m[, agree := sign(mor) * sign(stat)]
-      m[, color := ifelse(agree > 0, "supports activation",
-                   ifelse(agree < 0, "opposes activation", "neutral"))]
+      if (isTRUE(tf_signed())) {
+        m[, agree := sign(mor) * sign(stat)]
+        m[, effect := ifelse(agree > 0, "supports activation",
+                      ifelse(agree < 0, "opposes activation", "neutral"))]
+      } else {
+        m[, effect := ifelse(stat > 0, "target up",
+                      ifelse(stat < 0, "target down", "flat"))]
+      }
       m[order(-abs(stat))]
     })
 
     # volcano of the regulon's targets (decoupleR TF vignette style): log2FC vs
-    # -log10 p, coloured by whether the change agrees with the mode of
-    # regulation. Falls back to a signed target bar when the DAA table has no
-    # p-value column.
+    # -log10 p. Signed sets colour by agreement with the edge sign; unsigned
+    # sets colour by direction only (no activation call). Falls back to a target
+    # bar when the DAA table has no p-value column.
     insp_gg <- reactive({
       dd <- insp_data(); req(nrow(dd) > 0); tf <- input$insp_tf; cc <- input$insp_c
+      signed <- isTRUE(tf_signed())
+      cols   <- if (signed) c("supports activation" = "#B2182B",
+                              "opposes activation" = "#2166AC", "neutral" = "grey70")
+                else        c("target up" = "#B2182B",
+                              "target down" = "#2166AC", "flat" = "grey70")
       volc <- mean(is.finite(dd$logfc)) > 0.5 && mean(is.finite(dd$pval)) > 0.5
       if (volc) {
         dv  <- dd[is.finite(logfc) & is.finite(pval)]
         lab <- head(dv[order(-abs(stat))], 15)
-        ggplot(dv, aes(logfc, -log10(pmax(pval, 1e-300)), color = color)) +
+        ggplot(dv, aes(logfc, -log10(pmax(pval, 1e-300)), color = effect)) +
           geom_vline(xintercept = 0, linetype = 3, color = "grey60") +
           geom_point(size = 2.3, alpha = 0.85) +
           geom_text(data = lab, aes(label = gene), size = 3, vjust = -0.7,
                     check_overlap = TRUE, show.legend = FALSE) +
-          scale_color_manual(values = c("supports activation" = "#B2182B",
-                                        "opposes activation" = "#2166AC",
-                                        "neutral" = "grey70"), name = NULL) +
+          scale_color_manual(values = cols, name = NULL) +
           labs(x = "log2 fold change", y = "-log10 p-value",
-               title = sprintf("%s targets on the %s volcano", tf, cc)) +
+               title = if (signed)
+                 sprintf("%s targets on the %s volcano", tf, cc)
+               else
+                 sprintf("%s targets on the %s volcano  (unsigned set - direction only, not an activation call)",
+                         tf, cc)) +
           theme_minimal(base_size = 12)
       } else {
         db <- data.table::copy(head(dd[order(-abs(stat))], 40))
-        db[, dir := ifelse(mor > 0, "activating target", "repressing target")]
-        ggplot(db, aes(stat, reorder(gene, stat), fill = dir)) +
-          geom_col() +
-          scale_fill_manual(values = c("activating target" = "#B2182B",
-                                       "repressing target" = "#2166AC"), name = NULL) +
-          geom_vline(xintercept = 0, color = "grey40") +
-          labs(x = sprintf("%s (%s)", RES()$stat, cc), y = NULL,
-               title = sprintf("%s targets  (no p-value column - showing %s; activating up / repressing down = active)",
-                               tf, RES()$stat)) +
-          theme_minimal(base_size = 12)
+        if (signed) {
+          db[, grp := ifelse(mor > 0, "activating target", "repressing target")]
+          ggplot(db, aes(stat, reorder(gene, stat), fill = grp)) +
+            geom_col() +
+            scale_fill_manual(values = c("activating target" = "#B2182B",
+                                         "repressing target" = "#2166AC"), name = NULL) +
+            geom_vline(xintercept = 0, color = "grey40") +
+            labs(x = sprintf("%s (%s)", RES()$stat, cc), y = NULL,
+                 title = sprintf("%s targets  (no p-value column; activating up / repressing down = active)",
+                                 tf)) +
+            theme_minimal(base_size = 12)
+        } else {
+          ggplot(db, aes(stat, reorder(gene, stat), fill = stat > 0)) +
+            geom_col() +
+            scale_fill_manual(values = c("#2166AC", "#B2182B"), guide = "none") +
+            geom_vline(xintercept = 0, color = "grey40") +
+            labs(x = sprintf("%s (%s)", RES()$stat, cc), y = NULL,
+                 title = sprintf("%s targets  (unsigned set - direction of the target set only)", tf)) +
+            theme_minimal(base_size = 12)
+        }
       }
     })
     output$insp_plot <- renderPlot(insp_gg())
     .dc_reg_dl(output, "insp_plot", insp_gg, "regulon_inspector", w = 9, h = 7)
     output$insp_note <- renderUI({
       req(RES())
-      helpText("Each point is one target of the regulon. ",
-               strong("Red"), " = the gene's change agrees with its edge sign ",
-               "(activating target up, or repressing target down), i.e. it ",
-               "supports an 'active' call; ", strong("blue"), " opposes it. ",
-               "A call carried by only two or three red points is weak.")
+      if (isTRUE(tf_signed()))
+        helpText("Each point is one target of the regulon. ",
+                 strong("Red"), " = the gene's change agrees with its edge sign ",
+                 "(activating target up, or repressing target down), i.e. it ",
+                 "supports an 'active' call; ", strong("blue"), " opposes it. ",
+                 "A call carried by only two or three red points is weak.")
+      else
+        helpText(strong("Unsigned set (ChEA / .gmt): "), "every edge weight is ",
+                 "1, so there is no activation direction to agree with. Colour ",
+                 "is just whether each target went up or down in your data - a ",
+                 "positive score means the target set moved up ",
+                 strong("as a group"), ", not that the TF is activated.")
     })
     output$insp_tbl <- renderDT({
-      dd <- insp_data(); req(nrow(dd) > 0)
-      datatable(dd[, .(target = gene, mode = ifelse(mor > 0, "+", "-"),
-                       log2fc = round(logfc, 3), p_value = signif(pval, 3),
-                       stat = round(stat, 3), effect = color)],
-                rownames = FALSE, options = list(pageLength = 15))
+      dd <- insp_data(); req(nrow(dd) > 0); signed <- isTRUE(tf_signed())
+      cols <- if (signed)
+        dd[, .(target = gene, mode = ifelse(mor > 0, "+", "-"),
+               log2fc = round(logfc, 3), p_value = signif(pval, 3),
+               stat = round(stat, 3), effect)]
+      else
+        dd[, .(target = gene, log2fc = round(logfc, 3), p_value = signif(pval, 3),
+               stat = round(stat, 3), direction = effect)]
+      datatable(cols, rownames = FALSE, options = list(pageLength = 15))
     })
 
     # ---- pathway inspector --------------------------------------------------
@@ -856,9 +895,13 @@ decouplerServer <- function(id, dea) {
       sm <- data.table(gene = rownames(r$mat), stat = r$mat[, input$pw_insp_c])
       m  <- merge(merge(tg, gs, by = "gene", all.x = TRUE), sm, by = "gene")
       validate(need(nrow(m) > 0, "No overlap between this set and your data."))
-      m[, effect := ifelse(weight == 0 | stat == 0, "neutral",
-                    ifelse(sign(weight) == sign(stat), "supports activity",
-                           "opposes activity"))]
+      if (isTRUE(pw_signed()))
+        m[, effect := ifelse(weight == 0 | stat == 0, "neutral",
+                      ifelse(sign(weight) == sign(stat), "supports activity",
+                             "opposes activity"))]
+      else
+        m[, effect := ifelse(stat > 0, "gene up",
+                      ifelse(stat < 0, "gene down", "flat"))]
       m[order(-abs(weight * stat))]
     })
 
@@ -941,10 +984,14 @@ decouplerServer <- function(id, dea) {
     })
     output$pw_insp_tbl <- renderDT({
       dd <- pw_insp_data(); req(nrow(dd) > 0)
-      datatable(dd[, .(gene, weight = round(weight, 3),
-                       log2fc = round(logfc, 3), p_value = signif(pval, 3),
-                       stat = round(stat, 3), effect)],
-                rownames = FALSE, options = list(pageLength = 15))
+      cols <- if (isTRUE(pw_signed()))
+        dd[, .(gene, weight = round(weight, 3),
+               log2fc = round(logfc, 3), p_value = signif(pval, 3),
+               stat = round(stat, 3), effect)]
+      else
+        dd[, .(gene, log2fc = round(logfc, 3), p_value = signif(pval, 3),
+               stat = round(stat, 3), direction = effect)]
+      datatable(cols, rownames = FALSE, options = list(pageLength = 15))
     })
 
     # ---- contrast correlation ----
