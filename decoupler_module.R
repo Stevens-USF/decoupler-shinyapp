@@ -290,11 +290,17 @@ DC_ORGANISM <- getOption("decoupler.organism", "human")
                              .mor = "mor", minsize = minsize),
     mlm = decoupleR::run_mlm(mat, net, .source = "source", .target = "target",
                              .mor = "mor", minsize = minsize),
-    viper = decoupleR::run_viper(mat, net, .source = "source", .target = "target",
-                                 .mor = "mor", minsize = minsize, pleiotropy = TRUE,
-                                 verbose = FALSE),
-    fgsea = decoupleR::run_fgsea(mat, net, .source = "source", .target = "target",
-                                 minsize = minsize),
+    # requireNamespace() calls below are inert at runtime (decoupleR loads these
+    # itself) but their literal presence is what makes rsconnect's dependency
+    # scanner bundle 'viper'/'fgsea' on deploy - decoupleR only Suggests them,
+    # so without this hint the scanner never installs them on the server.
+    viper = { requireNamespace("viper", quietly = TRUE)
+      decoupleR::run_viper(mat, net, .source = "source", .target = "target",
+                           .mor = "mor", minsize = minsize, pleiotropy = TRUE,
+                           verbose = FALSE) },
+    fgsea = { requireNamespace("fgsea", quietly = TRUE)
+      decoupleR::run_fgsea(mat, net, .source = "source", .target = "target",
+                           minsize = minsize) },
     consensus = {
       r <- decoupleR::decouple(mat, net, .source = "source", .target = "target",
              statistics = c("ulm", "mlm", "wsum"), consensus = TRUE,

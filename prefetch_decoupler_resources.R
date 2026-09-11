@@ -11,6 +11,11 @@
 #    Rscript prefetch_decoupler_resources.R human mouse  # both
 #
 #  Needs: decoupleR, OmnipathR  (BiocManager::install(c("decoupleR","OmnipathR")))
+#  The app's VIPER / GSEA regulator-scoring options need two more packages that
+#  decoupleR only Suggests (not installed automatically):
+#    BiocManager::install(c("viper", "fgsea"))
+#  Without them, selecting VIPER or GSEA silently falls back to ULM with a
+#  warning ("there is no package called 'viper'/'fgsea'").
 #
 #  Resources fetched:
 #    collectri        CollecTRI            TF regulon, curated, signed
