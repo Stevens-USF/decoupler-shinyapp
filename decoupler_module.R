@@ -290,6 +290,11 @@ DC_ORGANISM <- getOption("decoupler.organism", "human")
                              .mor = "mor", minsize = minsize),
     mlm = decoupleR::run_mlm(mat, net, .source = "source", .target = "target",
                              .mor = "mor", minsize = minsize),
+    viper = decoupleR::run_viper(mat, net, .source = "source", .target = "target",
+                                 .mor = "mor", minsize = minsize, pleiotropy = TRUE,
+                                 verbose = FALSE),
+    fgsea = decoupleR::run_fgsea(mat, net, .source = "source", .target = "target",
+                                 minsize = minsize),
     consensus = {
       r <- decoupleR::decouple(mat, net, .source = "source", .target = "target",
              statistics = c("ulm", "mlm", "wsum"), consensus = TRUE,
@@ -300,8 +305,8 @@ DC_ORGANISM <- getOption("decoupler.organism", "human")
     })
   if (identical(method, "ulm")) return(run1("ulm"))
   tryCatch(run1(method), error = function(e) {
-    warn(sprintf("%s could not fit this set (collinear sources); scored with ULM instead.",
-                 toupper(method)))
+    warn(sprintf("%s could not score this set (%s); scored with ULM instead.",
+                 toupper(method), conditionMessage(e)))
     run1("ulm")
   })
 }
@@ -389,7 +394,11 @@ call NF-kB / TNF / interferon active. If it does not, do not trust the rest.</li
 the regulator activates or represses those genes. Example: KDM5B is a repressor,
 so if its targets go up its activity has most likely gone <i>down</i> &mdash; the
 opposite of the sign shown. For activation calls use CollecTRI / DoRothEA; for
-unsigned sets prefer GOAT / GSEA and supply the direction from biology yourself.</p>
+unsigned sets (ChEA, MSigDB) the <b>GSEA</b> scoring method below is the better
+cross-check than ULM/VIPER (it is rank-based, immune to one outlier gene&rsquo;s
+magnitude, and is the method that resource was historically evaluated with) &mdash;
+but no method can recover a direction this resource does not carry, so you still
+have to supply the activation/repression call from biology yourself.</p>
 
 <h4>Per-gene statistic</h4>
 <ul>
@@ -404,21 +413,32 @@ changes.</li>
 <li><b>signed -log10(q)</b> &mdash; thresholded and conservative; result depends
 on how many proteins pass FDR in that contrast.</li>
 </ul>
-<p>Run with two of these and trust only regulators that survive both. Match the
-choice to any GOAT / GSEA comparison (GOAT ranked by signed effect size is close
-to <i>effectsize</i> here).</p>
+<p>Run with two of these and trust only regulators that survive both.</p>
 
-<h4>Scoring method (ULM vs MLM)</h4>
-<p>Both fit a linear model of your per-gene statistic against target-set
-membership. They differ in whether the sets are fitted one at a time or all at
-once, and that difference decides which collections each can handle.</p>
+<h4>Scoring method</h4>
+<p>All of these turn your per-gene statistic and a target set into one score per
+regulator per contrast. They differ in the model, and that difference decides
+which collections each can handle and what kind of error each is resistant to.</p>
 <ul>
 <li><b>ULM (univariate)</b> &mdash; each regulator / set is scored on its own:
 regress the per-gene statistic on that one set&rsquo;s membership (using its
 signed weights where it has them), and take the slope&rsquo;s t-value as the
 score. Fast, and the result for a set does not depend on how many other sets you
-loaded or how much they overlap. This is the default and the primary method for
-every panel here.</li>
+loaded or how much they overlap. The default.</li>
+<li><b>VIPER</b> &mdash; also scores one regulator at a time (so, like ULM, it
+scales fine to CollecTRI/ChEA-sized collections), but adds a pleiotropy
+correction: a target gene shared by several regulators is down-weighted so it
+cannot drive multiple regulators&rsquo; scores at once. Slower than ULM; reach for
+it when regulon <i>overlap</i> specifically is the worry.</li>
+<li><b>GSEA</b> (fgsea&rsquo;s adaptive multilevel algorithm under the hood)
+&mdash; ranks genes by the per-gene statistic and asks whether a set&rsquo;s
+targets pile up at the extremes of that ranking, instead of regressing on the raw
+values. A single degenerate value (e.g. an msqrob effect size blown up by a
+near-zero variance estimate) can only occupy one rank position, so GSEA cannot be
+hijacked by it the way ULM/VIPER can &mdash; the reason it is the recommended
+cross-check for <b>unsigned</b> sets above. p-values come from fgsea&rsquo;s
+multilevel approximation, not brute-force permutation, so it stays fast even at
+small p.</li>
 <li><b>MLM (multivariate)</b> &mdash; every set in the collection is entered into
 <i>one</i> regression as competing predictors, so a gene targeted by several
 regulators is credited to whichever set best explains the leftover signal. In
@@ -431,17 +451,19 @@ the MLM term still carries some of that instability but it is diluted by the oth
 two. Use it as a second opinion on the ULM regulator calls.</li>
 </ul>
 
-<p><b>Why the regulator panel is ULM-only.</b> CollecTRI (~1000 TFs) and
+<p><b>Why MLM is not offered for regulators.</b> CollecTRI (~1000 TFs) and
 ChEA&nbsp;2022 (~1000 TFs, built from ChIP-seq peaks) are both large and heavily
 overlapping &mdash; many factors co-bind the same active promoters, and
 ChEA&rsquo;s peak-to-gene target sets are especially broad and noisy. That is
 precisely the regime where MLM is unstable, and the decoupleR benchmark
 (Badia-i-Mompel 2022) found ULM and consensus best for TF activity on collections
-this size. So MLM is not offered for regulators; choose <b>consensus</b> if you
-want a cross-check. ChEA is also unsigned (every weight = 1), so its score is set
-<i>enrichment</i> &mdash; &ldquo;these ChIP targets moved together&rdquo; &mdash;
-not an activity estimate, and MLM&rsquo;s deconvolution idea does not even apply
-to that question.</p>
+this size. ULM, VIPER and GSEA don&rsquo;t have this problem &mdash; like ULM,
+they all score one regulator at a time; MLM is the only method here that puts
+every regulator into one shared regression, which is what breaks on a large
+overlapping collection. ChEA is also unsigned (every weight = 1), so its score is
+set <i>enrichment</i> &mdash; &ldquo;these ChIP targets moved together&rdquo;
+&mdash; not an activity estimate, and MLM&rsquo;s deconvolution idea does not even
+apply to that question.</p>
 
 <p><b>The pathway panel picks the method for you.</b>
 <b>PROGENy</b> is the single MLM case: 14 pathways of ~100 curated response genes
@@ -525,6 +547,8 @@ decouplerTabUI <- function(id) {
       uiOutput(ns("ui_pw_resource")),
       radioButtons(ns("method"), "Regulator scoring method",
                    c("ULM (fast, default)" = "ulm",
+                     "VIPER (pleiotropy-corrected)" = "viper",
+                     "GSEA (rank-based, unsigned-set friendly)" = "fgsea",
                      "consensus (slow)" = "consensus"), selected = "ulm"),
       numericInput(ns("minsize"), "Min. targets per regulator", 5, 3, 50),
       numericInput(ns("topn"), "Rows shown in heatmaps (most variable)", 30, 10, 100),
