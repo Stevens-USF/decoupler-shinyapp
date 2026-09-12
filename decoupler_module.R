@@ -561,6 +561,7 @@ decouplerTabUI <- function(id) {
       uiOutput(ns("ui_stat")),
       uiOutput(ns("ui_tf_resource")),
       uiOutput(ns("ui_pw_resource")),
+      uiOutput(ns("ui_pw_method_note")),
       radioButtons(ns("method"), "Regulator scoring method",
                    c("ULM (fast, default)" = "ulm",
                      "VIPER (pleiotropy-corrected)" = "viper",
@@ -714,6 +715,33 @@ decouplerServer <- function(id, dea) {
                   selected = if ("progeny" %in% ch) "progeny" else ch[1])
     })
 
+    # Pathway scoring isn't user-selectable the way regulator scoring is - it's
+    # picked automatically per resource (see .dc_score() call in observeEvent
+    # below and the Help tab). This just surfaces *why*, and for the one case
+    # where a real alternative exists (unsigned sets: MSigDB), offers it as an
+    # opt-in checkbox rather than a full method picker.
+    output$ui_pw_method_note <- renderUI({
+      req(input$pw_resource)
+      pid <- input$pw_resource
+      if (identical(pid, "progeny")) {
+        helpText(style = "color:#888;",
+          "Pathway scoring: MLM (fixed). PROGENy's 14 near-orthogonal pathways",
+          "are the one collection MLM was designed for - see Help.")
+      } else if (.dc_is_signed(pid)) {
+        helpText(style = "color:#888;",
+          "Pathway scoring: ULM (fixed). Signed weights - the score is a",
+          "real activity call.")
+      } else {
+        tagList(
+          helpText(style = "color:#888;",
+            "Pathway scoring: ULM by default. This set is unsigned (MSigDB) -",
+            "GSEA is a rank-based alternative immune to a single outlier gene",
+            "(and the method this resource was historically evaluated with)."),
+          checkboxInput(ns("pw_gsea"), "Use GSEA instead for this set", FALSE)
+        )
+      }
+    })
+
     observeEvent(input$run, {
       d <- dea_n(); req(d, input$contrasts, input$stat, input$tf_resource, input$pw_resource)
       if (!requireNamespace("decoupleR", quietly = TRUE)) {
@@ -748,10 +776,12 @@ decouplerServer <- function(id, dea) {
         setDT(tf)
 
         incProgress(0.2, detail = "scoring pathway / signature activity")
+        pw_method <- if (identical(pw_id, "progeny")) "mlm"
+                     else if (.dc_is_signed(pw_id)) "ulm"
+                     else if (isTRUE(input$pw_gsea)) "fgsea"
+                     else "ulm"
         pwr <- if (!is.null(pw) && nrow(pw) > 0)
-          as.data.table(.dc_score(mat, pw,
-            if (identical(pw_id, "progeny")) "mlm" else "ulm",
-            input$minsize, warn))
+          as.data.table(.dc_score(mat, pw, pw_method, input$minsize, warn))
           else NULL
 
         RES(list(tf = tf, pw = pwr, mat = mat, net = as.data.table(col),
