@@ -299,8 +299,18 @@ DC_ORGANISM <- getOption("decoupler.organism", "human")
                            .mor = "mor", minsize = minsize, pleiotropy = TRUE,
                            verbose = FALSE) },
     fgsea = { requireNamespace("fgsea", quietly = TRUE)
-      decoupleR::run_fgsea(mat, net, .source = "source", .target = "target",
-                           minsize = minsize) },
+      # run_fgsea returns TWO rows per source x condition: statistic == "fgsea"
+      # (raw enrichment score, not comparable across sets of different size) and
+      # "norm_fgsea" (NES, size-normalized - the standard reported GSEA statistic,
+      # and the only one safe to compare across regulators/sets with the heatmap
+      # and other cross-set views elsewhere in this app). Keep norm_fgsea only,
+      # same pattern as the consensus filter below - otherwise the duplicate rows
+      # break dcast() (source x condition no longer unique) and every heatmap
+      # cell silently shows a row count instead of a score.
+      r <- decoupleR::run_fgsea(mat, net, .source = "source", .target = "target",
+                                minsize = minsize)
+      r[r$statistic == "norm_fgsea", ]
+    },
     consensus = {
       r <- decoupleR::decouple(mat, net, .source = "source", .target = "target",
              statistics = c("ulm", "mlm", "wsum"), consensus = TRUE,
